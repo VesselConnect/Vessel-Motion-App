@@ -12,18 +12,17 @@ def trapz_compat(y, x):
         return np.trapezoid(y, x)
     return np.trapz(y, x)
 
-
 if 'single_result_df' not in st.session_state:
     st.session_state.single_result_df = None
 if 'grid_result_df' not in st.session_state:
     st.session_state.grid_result_df = None
 if 'plot_metric' not in st.session_state:
     st.session_state.plot_metric = 'RMS vertical displacement (m)'
-
+if 'point_coords' not in st.session_state:
+    st.session_state.point_coords = {'x': -10.0, 'y': -9.0, 'z': 4.0}
 
 def norm_phase_deg(phi_deg):
     return np.mod(phi_deg, 360.0)
-
 
 def excel_col_name(idx):
     idx += 1
@@ -32,7 +31,6 @@ def excel_col_name(idx):
         idx, rem = divmod(idx - 1, 26)
         name = chr(65 + rem) + name
     return name
-
 
 def find_header_rows(raw, search_rows=8):
     motion_row = None
@@ -50,7 +48,6 @@ def find_header_rows(raw, search_rows=8):
         raise ValueError('Could not identify header rows')
     return period_row, motion_row, subheader_row
 
-
 def detect_columns(raw):
     period_row, motion_row, subheader_row = find_header_rows(raw)
     ncols = raw.shape[1]
@@ -62,7 +59,6 @@ def detect_columns(raw):
             break
     if period_col is None:
         raise ValueError('Could not find Wave Period column')
-
     detected = {
         'period_col': period_col,
         'period_row': period_row,
@@ -70,7 +66,6 @@ def detect_columns(raw):
         'subheader_row': subheader_row,
         'period_excel': excel_col_name(period_col),
     }
-
     for motion in ['heave', 'roll', 'pitch']:
         amp_col = None
         phase_col = None
@@ -103,16 +98,13 @@ def detect_columns(raw):
         detected[f'{motion}_phase_excel'] = excel_col_name(phase_col)
     return detected
 
-
 @st.cache_data
 def get_sheet_names(file_path):
     return pd.ExcelFile(file_path).sheet_names
 
-
 @st.cache_data
 def load_raw_sheet(file_path, sheet_name):
     return pd.read_excel(file_path, sheet_name=sheet_name, header=None)
-
 
 def parse_sheet(raw, cols):
     data_start_row = cols['subheader_row'] + 2
@@ -137,7 +129,6 @@ def parse_sheet(raw, cols):
         raise ValueError('Too few valid RAO rows found after parsing')
     return selected
 
-
 def jonswap_shape(omega, Tp, gamma=3.3):
     wp = 2.0 * np.pi / Tp
     sigma = np.where(omega <= wp, 0.07, 0.09)
@@ -145,13 +136,11 @@ def jonswap_shape(omega, Tp, gamma=3.3):
     base = (G ** 2) * (omega ** -5.0) * np.exp(-1.25 * (wp / omega) ** 4.0)
     return base * (gamma ** r)
 
-
 def scale_spectrum_to_hs(omega, S0, hs_target):
     m0_0 = trapz_compat(S0, omega)
     hs_0 = 4.0 * np.sqrt(m0_0)
     scale = (hs_target / hs_0) ** 2.0
     return scale * S0
-
 
 def build_point_vertical_rao(df, x_point, y_point):
     T = df['T'].to_numpy(dtype=float)
@@ -169,7 +158,6 @@ def build_point_vertical_rao(df, x_point, y_point):
     order = np.argsort(omega)
     return omega[order], rao_point[order]
 
-
 def most_probable_maximum(sigma, Tz, duration_seconds):
     if sigma <= 0 or Tz <= 0 or duration_seconds <= 0:
         return np.nan
@@ -178,31 +166,25 @@ def most_probable_maximum(sigma, Tz, duration_seconds):
         return sigma
     return sigma * np.sqrt(2.0 * np.log(n))
 
-
 def compute_response(omega, rao_point, hs, tp, gamma, duration_hours, df=None):
     S0 = jonswap_shape(omega, tp, gamma)
     S_eta = scale_spectrum_to_hs(omega, S0, hs)
     S_z = (np.abs(rao_point) ** 2) * S_eta
     S_v = (omega ** 2) * S_z
     S_a = (omega ** 4) * S_z
-
     m0_z = trapz_compat(S_z, omega)
     m2_z = trapz_compat((omega ** 2) * S_z, omega)
     m0_v = trapz_compat(S_v, omega)
     m2_v = trapz_compat((omega ** 2) * S_v, omega)
     m0_a = trapz_compat(S_a, omega)
-
     rms_z = np.sqrt(m0_z)
     rms_v = np.sqrt(m0_v)
     rms_a = np.sqrt(m0_a)
-
     Tz_z = 2.0 * np.pi * np.sqrt(m0_z / m2_z) if m0_z > 0 and m2_z > 0 else np.nan
     Tz_v = 2.0 * np.pi * np.sqrt(m0_v / m2_v) if m0_v > 0 and m2_v > 0 else np.nan
-
     duration_seconds = duration_hours * 3600.0
     mpm_z = most_probable_maximum(rms_z, Tz_z, duration_seconds)
     mpm_v = most_probable_maximum(rms_v, Tz_v, duration_seconds)
-
     result = {
         'RMS vertical displacement (m)': rms_z,
         'Significant vertical displacement (m)': 2.0 * rms_z,
@@ -215,45 +197,35 @@ def compute_response(omega, rao_point, hs, tp, gamma, duration_hours, df=None):
         'Response Tz displacement (s)': Tz_z,
         'Response Tz velocity (s)': Tz_v,
     }
-
     if df is not None:
         T = df['T'].to_numpy(dtype=float)
         omega_df = 2.0 * np.pi / T
         order = np.argsort(omega_df)
         omega_df = omega_df[order]
-
         heave_amp = df['heave_amp'].to_numpy(dtype=float)[order]
         roll_amp_rad = (df['roll_amp_deg_per_m'].to_numpy(dtype=float) * np.pi / 180.0)[order]
         pitch_amp_rad = (df['pitch_amp_deg_per_m'].to_numpy(dtype=float) * np.pi / 180.0)[order]
-
         S_heave = (heave_amp ** 2) * S_eta
         S_roll = (roll_amp_rad ** 2) * S_eta
         S_pitch = (pitch_amp_rad ** 2) * S_eta
-
         m0_heave = trapz_compat(S_heave, omega_df)
         m0_roll = trapz_compat(S_roll, omega_df)
         m2_roll = trapz_compat((omega_df ** 2) * S_roll, omega_df)
         m0_pitch = trapz_compat(S_pitch, omega_df)
         m2_pitch = trapz_compat((omega_df ** 2) * S_pitch, omega_df)
-
         rms_heave = np.sqrt(m0_heave)
         rms_roll_rad = np.sqrt(m0_roll)
         rms_pitch_rad = np.sqrt(m0_pitch)
-
         Tz_roll = 2.0 * np.pi * np.sqrt(m0_roll / m2_roll) if m0_roll > 0 and m2_roll > 0 else np.nan
         Tz_pitch = 2.0 * np.pi * np.sqrt(m0_pitch / m2_pitch) if m0_pitch > 0 and m2_pitch > 0 else np.nan
-
         mpm_roll_rad = most_probable_maximum(rms_roll_rad, Tz_roll, duration_seconds)
         mpm_pitch_rad = most_probable_maximum(rms_pitch_rad, Tz_pitch, duration_seconds)
-
         result['RMS heave (m)'] = rms_heave
         result['RMS roll (deg)'] = rms_roll_rad * 180.0 / np.pi
         result['Most probable max roll (deg)'] = mpm_roll_rad * 180.0 / np.pi if not np.isnan(mpm_roll_rad) else np.nan
         result['RMS pitch (deg)'] = rms_pitch_rad * 180.0 / np.pi
         result['Most probable max pitch (deg)'] = mpm_pitch_rad * 180.0 / np.pi if not np.isnan(mpm_pitch_rad) else np.nan
-
     return result
-
 
 def parse_range(text):
     values = []
@@ -263,38 +235,34 @@ def parse_range(text):
             values.append(float(p))
     return values
 
-
 st.title('Vessel Point Motion Calculator')
 st.write('Corrected parser version with most probable maximum vertical displacement and velocity over a selected duration.')
 
+# Key fixes: persist coordinates in session_state, handle file upload properly
 uploaded_file = st.file_uploader('Upload RAO Excel workbook', type=['xlsx'])
 
 if uploaded_file is not None:
-    temp_path = Path('/tmp/rao_input_corrected_extremes.xlsx')
-    temp_path.write_bytes(uploaded_file.read())
-
+    # Write file to temp path - file_uploader gives a BytesIO that can be read once
+    temp_path = Path('/tmp/rao_input.xlsx')
+    temp_path.write_bytes(uploaded_file.getvalue())
     try:
-        sheet_names = get_sheet_names(temp_path)
+        sheet_names = get_sheet_names(str(temp_path))
         default_idx = sheet_names.index('Heading_180 deg') if 'Heading_180 deg' in sheet_names else 0
         sheet_name = st.selectbox('Heading sheet', sheet_names, index=default_idx)
-
-        raw = load_raw_sheet(temp_path, sheet_name)
+        raw = load_raw_sheet(str(temp_path), sheet_name)
         cols = detect_columns(raw)
-
         with st.expander('Parser diagnostics'):
             st.json(cols)
             st.dataframe(raw.iloc[:8, :14], use_container_width=True)
             st.dataframe(parse_sheet(raw, cols).head(15), use_container_width=True)
 
         st.subheader('Point coordinates')
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            x_point = st.number_input('X coordinate (m)', value=-10.0, step=1.0)
-        with c2:
-            y_point = st.number_input('Y coordinate (m)', value=-9.0, step=1.0)
-        with c3:
-            z_point = st.number_input('Z coordinate (m)', value=4.0, step=1.0)
-
+        # Initialize session_state for coords if not already set
+        if 'point_coords' not in st.session_state:
+            st.session_state.point_coords = {'x': -10.0, 'y': -9.0, 'z': 4.0}
+        x_point = st.number_input('X coordinate (m)', value=st.session_state.point_coords['x'], step=1.0, key='x_coord')
+        y_point = st.number_input('Y coordinate (m)', value=st.session_state.point_coords['y'], step=1.0, key='y_coord')
+        z_point = st.number_input('Z coordinate (m)', value=st.session_state.point_coords['z'], step=1.0, key='z_coord')
         st.caption('Z is stored for reference, but the vertical rigid-body displacement formula uses heave, pitch with X offset, and roll with Y offset.')
 
         st.subheader('Sea state input')
@@ -311,7 +279,6 @@ if uploaded_file is not None:
                 hs = st.number_input('Hs (m)', value=2.0, min_value=0.0, step=0.1)
             with c5:
                 tp = st.number_input('Tp (s)', value=10.0, min_value=0.1, step=0.5)
-
             if st.button('Calculate single sea state'):
                 result = compute_response(omega, rao_point, hs, tp, gamma, duration_hours, df)
                 result_df = pd.DataFrame({'Metric': list(result.keys()), 'Value': list(result.values())})
@@ -319,9 +286,6 @@ if uploaded_file is not None:
                 st.session_state.single_result_df = result_df
                 st.session_state.grid_result_df = None
 
-            if st.session_state.single_result_df is not None:
-                st.subheader('Results')
-                st.dataframe(st.session_state.single_result_df, use_container_width=True)
         else:
             st.write('Enter comma-separated values, for example Hs: 1.5,2.0 and Tp: 8,9,10,11,12,13')
             c6, c7 = st.columns(2)
@@ -329,7 +293,6 @@ if uploaded_file is not None:
                 hs_text = st.text_input('Hs values (m)', value='1.5, 2.0')
             with c7:
                 tp_text = st.text_input('Tp values (s)', value='8, 9, 10, 11, 12, 13')
-
             if st.button('Calculate sea-state grid'):
                 hs_values = parse_range(hs_text)
                 tp_values = parse_range(tp_text)
@@ -354,21 +317,27 @@ if uploaded_file is not None:
                 st.session_state.grid_result_df = grid_df
                 st.session_state.single_result_df = None
 
-            if st.session_state.grid_result_df is not None:
-                st.subheader('Grid results')
-                st.dataframe(st.session_state.grid_result_df, use_container_width=True)
-
-                plot_metric = st.selectbox('Plot metric', [
-                    'RMS vertical displacement (m)',
-                    'Most probable max vertical displacement (m)',
-                    'RMS vertical velocity (m/s)',
-                    'Most probable max vertical velocity (m/s)',
-                    'RMS vertical acceleration (m/s²)',
-                ], key='plot_metric')
-                pivot = st.session_state.grid_result_df.pivot(index='Tp_s', columns='Hs_m', values=plot_metric).sort_index()
-                st.line_chart(pivot)
-
     except Exception as e:
         st.error(f'Error: {e}')
+
+# Render results OUTSIDE the file upload block so they persist across reruns
+st.subheader('Results')
+if st.session_state.single_result_df is not None:
+    st.dataframe(st.session_state.single_result_df, use_container_width=True, height=360)
+    csv = st.session_state.single_result_df.to_csv(index=False)
+    st.download_button('Download as CSV', csv, 'vessel_motion_results.csv', 'text/csv')
+elif st.session_state.grid_result_df is not None:
+    st.dataframe(st.session_state.grid_result_df, use_container_width=True)
+    plot_metric = st.selectbox('Plot metric', [
+        'RMS vertical displacement (m)',
+        'Most probable max vertical displacement (m)',
+        'RMS vertical velocity (m/s)',
+        'Most probable max vertical velocity (m/s)',
+        'RMS vertical acceleration (m/s²)',
+    ], key='plot_metric')
+    pivot = st.session_state.grid_result_df.pivot(index='Tp_s', columns='Hs_m', values=plot_metric).sort_index()
+    st.line_chart(pivot)
+    csv = st.session_state.grid_result_df.to_csv(index=False)
+    st.download_button('Download as CSV', csv, 'vessel_motion_grid_results.csv', 'text/csv')
 else:
-    st.info('Upload your RAO Excel workbook to begin.')
+    st.info('Upload an RAO workbook and click Calculate to see results.')
